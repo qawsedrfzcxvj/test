@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>シンプル大富豪</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0c0c0c; color: #f0f0f0; margin: 0; padding: 10px; display: flex; flex-direction: column; align-items: center; justify-content: space-between; height: 100vh; overflow: hidden; }
+  h2 { margin: 2px 0; font-size: 1.1rem; color: #ddd; }
+  .box { background: #1a1a1a; border: 1px solid #333; padding: 10px; border-radius: 8px; width: 100%; max-width: 450px; text-align: center; margin-bottom: 6px; }
+  
+  /* カードデザイン */
+  .card { background: #fff; color: #111; border-radius: 5px; width: 45px; height: 68px; display: flex; flex-direction: column; justify-content: space-between; padding: 4px; font-weight: bold; cursor: pointer; user-select: none; border: 1px solid #ccc; font-size: 0.9rem; box-shadow: 0 2px 4px rgba(0,0,0,0.3); }
+  .card.red { color: #d32f2f; }
+  .card.selected { transform: translateY(-12px); border-color: #ffd700; background: #fffde7; box-shadow: 0 4px 8px rgba(255,215,0,0.3); }
+
+  /* 場札エリア */
+  #field { min-height: 75px; display: flex; justify-content: center; align-items: center; gap: 6px; flex-wrap: wrap; }
+  
+  /* 手札エリア */
+  .hand-container { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; align-items: center; max-height: 160px; overflow-y: auto; padding: 5px 0; }
+  
+  /* ボタン */
+  button { background: #2e7d32; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 1rem; font-weight: bold; }
+  button:hover { background: #388e3c; }
+  button:disabled { background: #444; color: #888; cursor: not-allowed; }
+  .btn-pass { background: #c62828; }
+  .btn-pass:hover { background: #d32f2f; }
+
+  /* プレイヤーリスト */
+  .players-list { display: flex; justify-content: space-around; font-size: 0.8rem; width: 100%; max-width: 450px; margin-bottom: 4px; gap: 4px; }
+  .player-item { padding: 4px 8px; border-radius: 4px; background: #1a1a1a; border: 1px solid #333; flex: 1; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .player-item.active { border-color: #4caf50; color: #4caf50; background: #112e12; font-weight: bold; }
+
+  input[type="text"] { padding: 8px; font-size: 1rem; border-radius: 6px; border: 1px solid #444; background: #222; color: #fff; width: 65%; }
+  
+  .notice { font-size: 0.75rem; color: #ffeb3b; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+  <!-- ログイン画面 -->
+  <div id="login-screen" style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; width:100%;">
+    <div class="box" style="max-width:320px;">
+      <h2>大富豪オンライン</h2>
+      <p style="font-size:0.85rem; color:#aaa;">名前を入力して参加</p>
+      <div style="display:flex; gap:8px; justify-content:center; margin-top:10px;">
+        <input type="text" id="nameInput" placeholder="プレイヤー名" maxlength="10">
+        <button onclick="joinGame()">入室</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ゲーム画面 -->
+  <div id="game-screen" style="display:none; width:100%; max-width:450px; flex-direction:column; align-items:center; height:100%;">
+    <h2>大富豪</h2>
+    
+    <div class="players-list" id="playersList"></div>
+
+    <!-- 待機中のホスト用スタートボタン -->
+    <div id="host-controls" class="box" style="display:none; background: #222; border-color: #555;">
+      <p style="margin: 0 0 8px 0; font-size: 0.85rem;" id="hostMsg">あなたがホストです。メンバーが揃ったらスタートしてください。</p>
+      <button id="btnStart" onclick="startGame()">ゲームスタート</button>
+    </div>
+
+    <!-- 場札 -->
+    <div class="box">
+      <div style="font-size:0.75rem; color:#888; margin-bottom:2px;">場札</div>
+      <div id="field"><span style="color:#666; font-size:0.85rem;">場は流れています</span></div>
+      <div id="noticeArea" class="notice"></div>
+    </div>
+
+    <!-- 手札・操作エリア -->
+    <div class="box" style="flex-grow:1; display:flex; flex-direction:column; justify-content:space-between; margin-bottom:0;">
+      <div>
+        <div style="font-size:0.75rem; color:#888; margin-bottom:2px;">あなたの手札</div>
+        <div id="hand" class="hand-container"></div>
+      </div>
+      <div style="margin-top:8px; display:flex; gap:10px; justify-content:center;">
+        <button id="btnPlay" onclick="playCards()" disabled>出す</button>
+        <button id="btnPass" class="btn-pass" onclick="passTurn()" disabled>パス</button>
+      </div>
+    </div>
+  </div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const socket = io();
+  let myHand = [];
+  let selectedIndices = new Set();
+  let isMyTurn = false;
+
+  function joinGame() {
+    const name = document.getElementById('nameInput').value.trim();
+    if (!name) return alert('名前を入力してください');
+    socket.emit('join', name);
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('game-screen').style.display = 'flex';
+  }
+
+  function startGame() {
+    socket.emit('start-game');
+  }
+
+  socket.on('alert', (msg) => {
+    alert(msg);
+  });
+
+  socket.on('updateState', (state) => {
+    // プレイヤー一覧
+    const pList = document.getElementById('playersList');
+    pList.innerHTML = state.players.map((p, idx) => 
+      `<div class="player-item ${state.gameStarted && idx === state.turnIndex ? 'active' : ''}">
+        ${p.isHost ? '👑' : ''}${p.name} (${p.cardCount})
+      </div>`
+    ).join('');
+
+    // ホストコントロール表示制御
+    const hostControls = document.getElementById('host-controls');
+    if (!state.gameStarted && state.isHost) {
+      hostControls.style.display = 'block';
+    } else {
+      hostControls.style.display = 'none';
+    }
+
+    // 場札
+    const field = document.getElementById('field');
+    if (state.field.length === 0) {
+      field.innerHTML = '<span style="color:#666; font-size:0.85rem;">場は流れています</span>';
+    } else {
+      field.innerHTML = state.field.map(c => renderCardHtml(c)).join('');
+    }
+
+    // スペード3の案内
+    const noticeArea = document.getElementById('noticeArea');
+    if (state.needsSpade3) {
+      noticeArea.innerText = '※ 最初は「♠3」を含めて出してください';
+    } else {
+      noticeArea.innerText = '';
+    }
+
+    // 手札
+    myHand = state.hand || [];
+    selectedIndices.clear();
+    renderHand();
+
+    // ターン判定
+    isMyTurn = state.isMyTurn;
+    document.getElementById('btnPlay').disabled = !isMyTurn;
+    document.getElementById('btnPass').disabled = !isMyTurn;
+  });
+
+  function renderCardHtml(card) {
+    const suits = { S: '♠', H: '♥', D: '♦', C: '♣' };
+    const numMap = { 1: 'A', 11: 'J', 12: 'Q', 13: 'K', 14: '2' };
+    const numStr = numMap[card.num] || card.num;
+    const isRed = card.suit === 'H' || card.suit === 'D';
+    return `<div class="card ${isRed ? 'red' : ''}">
+      <span style="font-size:0.8rem;">${numStr}</span>
+      <span style="align-self:center; font-size:1.3rem;">${suits[card.suit]}</span>
+      <span style="align-self:flex-end; font-size:0.8rem;">${numStr}</span>
+    </div>`;
+  }
+
+  function renderHand() {
+    const handDiv = document.getElementById('hand');
+    handDiv.innerHTML = myHand.map((card, idx) => {
+      const suits = { S: '♠', H: '♥', D: '♦', C: '♣' };
+      const numMap = { 1: 'A', 11: 'J', 12: 'Q', 13: 'K', 14: '2' };
+      const numStr = numMap[card.num] || card.num;
+      const isRed = card.suit === 'H' || card.suit === 'D';
+      const isSelected = selectedIndices.has(idx);
+      return `<div class="card ${isRed ? 'red' : ''} ${isSelected ? 'selected' : ''}" onclick="toggleSelect(${idx})">
+        <span style="font-size:0.8rem;">${numStr}</span>
+        <span style="align-self:center; font-size:1.3rem;">${suits[card.suit]}</span>
+        <span style="align-self:flex-end; font-size:0.8rem;">${numStr}</span>
+      </div>`;
+    }).join('');
+  }
+
+  function toggleSelect(idx) {
+    if (!isMyTurn) return;
+    if (selectedIndices.has(idx)) {
+      selectedIndices.delete(idx);
+    } else {
+      selectedIndices.add(idx);
+    }
+    renderHand();
+  }
+
+  function playCards() {
+    const indices = Array.from(selectedIndices);
+    if (indices.length === 0) return;
+    socket.emit('playCards', indices);
+  }
+
+  function passTurn() {
+    socket.emit('pass');
+  }
+</script>
+</body>
+</html>
